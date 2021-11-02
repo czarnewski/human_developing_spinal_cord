@@ -1,0 +1,678 @@
+---
+title: "Untitled"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## R Markdown
+
+This is an R Markdown document. Markdown is a simple formatting syntax for authoring HTML, PDF, and MS Word documents. For more details on using R Markdown see <http://rmarkdown.rstudio.com>.
+
+When you click the **Knit** button a document will be generated that includes both content as well as the output of any embedded R code chunks within the document. You can embed an R code chunk like this:
+
+```{r cars}
+summary(cars)
+```
+
+## Including Plots
+
+You can also embed plots, for example:
+
+```{r pressure, echo=FALSE}
+plot(pressure)
+```
+
+Note that the `echo = FALSE` parameter was added to the code chunk to prevent printing of the R code that generated the plot.
+
+```{r}
+if (!requireNamespace("BiocManager", quietly = TRUE))
+    install.packages("BiocManager")
+BiocManager::install("velociraptor")
+```
+
+# Read raw loom files to get spliced and unspliced data 
+```{r}
+library(future.apply)
+library(future)
+
+
+DATA <-readRDS("./DATA_Harmony.rds")
+DATA
+
+
+PATH_DATA <- "../data/loom_files/"
+file_list <- list.files(PATH_DATA,full.names = F,pattern = ".loom")
+
+plan( multiprocess , workers=availableCores()-1)
+unspliced <- future_lapply(  file_list, function(x){
+    data <- Matrix::t(Matrix::Matrix(
+      rhdf5::h5read(paste0(PATH_DATA,x), name = "/layers/unspliced"),sparse = T))
+    colnames(data) <-  rhdf5::h5read(paste0(PATH_DATA,x),name = "col_attrs/CellID")
+    rownames(data) <-  rhdf5::h5read(paste0(PATH_DATA,x),name = "row_attrs/Gene")
+    gc()
+    rhdf5::h5closeAll()
+    return(data)
+})
+unspliced2 <- do.call(cbind,unspliced)
+rm(unspliced)
+gc()
+ann <- colnames(unspliced2)[ match( sub( ".*_10X","",colnames(DATA)) , 
+                                    sub( "10X","",colnames(unspliced2)) )]
+DATA@assays[["unspliced"]] <- CreateAssayObject(counts = unspliced2[,ann])
+rm()
+
+
+
+
+plan( multiprocess , workers=availableCores()-1)
+spliced <- future_lapply(  file_list, function(x){
+    data <- Matrix::t(Matrix::Matrix(
+      rhdf5::h5read(paste0(PATH_DATA,x), name = "/layers/spliced"),sparse = T))
+    colnames(data) <-  rhdf5::h5read(paste0(PATH_DATA,x),name = "col_attrs/CellID")
+    rownames(data) <-  rhdf5::h5read(paste0(PATH_DATA,x),name = "row_attrs/Gene")
+    gc()
+    rhdf5::h5closeAll()
+    return(data) 
+})
+spliced <- do.call(cbind,spliced)
+ann <- colnames(spliced)[ match( sub( ".*_10X","",colnames(DATA)) , 
+                                    sub( "10X","",colnames(spliced)) )]
+DATA@assays[["spliced"]] <- CreateAssayObject(counts = spliced[,ann])
+
+
+rhdf5::h5ls(paste0(PATH_DATA,file_list[1]))
+
+DATA@assays$RNA@scale.data <- matrix(0)
+
+saveRDS(DATA, "DATA_Velocity.rds")
+```
+
+
+```{r}
+DATA<-readRDS("DATA_Velocity.rds")
+
+
+library(SingleCellExperiment)
+DATA@assays$RNA@scale.data <- matrix(0)
+gc()
+
+sce <- as.SingleCellExperiment(DATA)
+sce@assays@data$counts
+sce@assays@data[["spliced"]] <- DATA@assays$spliced@data
+sce@assays@data[["unspliced"]] <- DATA@assays$unspliced@data
+
+# 
+# DATA <- as.SingleCellExperiment(DATA, assay = c("spliced"))
+# DATA
+```
+
+
+```{r}
+# library(scuttle)
+# sce <- logNormCounts(sce, assay.type=1)
+# 
+# library(scran)
+# dec <- modelGeneVar(sce)
+# top.hvgs <- getTopHVGs(dec, n=2000)
+```
+
+
+```{r}
+library(velociraptor)
+genes_use <- rownames(DATA@assays$RNA@data)
+velo.out <- scvelo(list(X=DATA@assays$RNA@data[genes_use,],
+                        spliced=DATA@assays$spliced@data[genes_use,],
+                        unspliced=DATA@assays$unspliced@data[genes_use,]),
+                   subset.row=DATA@assays$RNA@var.features)
+velo.out
+DATA
+
+```
+
+
+```{r}
+saveRDS(velo.out,"velo_out.rds")
+
+library(scater)
+
+set.seed(100)
+#sce <- runPCA(sce, subset_row=top.hvgs)
+#sce <- runTSNE(sce, dimred="PCA")
+
+
+reducedDim(sce, "TSNE") <- DATA@reductions$umap@cell.embeddings
+
+sce$velocity_pseudotime <- velo.out$velocity_pseudotime
+plotTSNE(sce, colour_by="velocity_pseudotime")
+
+embedded <- embedVelocity(reducedDim(sce, "TSNE"), velo.out)
+grid.df <- gridVectors(reducedDim(sce, "TSNE"), embedded)
+
+library(ggplot2)
+plotTSNE(sce, colour_by="velocity_pseudotime") +
+    geom_segment(data=grid.df, mapping=aes(x=start.1, y=start.2, 
+        xend=end.1, yend=end.2), arrow=arrow(length=unit(0.05, "inches")))
+
+```
+
+
+
+#scvelo for Neurons 
+```{r}
+library(future.apply)
+library(future)
+
+
+DATA <-readRDS("../data/New_Trajectory_Neurons.rds")
+DATA
+
+
+PATH_DATA <- "../data/loom_files/"
+file_list <- list.files(PATH_DATA,full.names = F,pattern = ".loom")
+
+plan( multiprocess , workers=availableCores()-1)
+unspliced <- future_lapply(  file_list, function(x){
+    data <- Matrix::t(Matrix::Matrix(
+      rhdf5::h5read(paste0(PATH_DATA,x), name = "/layers/unspliced"),sparse = T))
+    colnames(data) <-  rhdf5::h5read(paste0(PATH_DATA,x),name = "col_attrs/CellID")
+    rownames(data) <-  rhdf5::h5read(paste0(PATH_DATA,x),name = "row_attrs/Gene")
+    gc()
+    rhdf5::h5closeAll()
+    return(data)
+})
+unspliced2 <- do.call(cbind,unspliced)
+rm(unspliced)
+gc()
+ann <- colnames(unspliced2)[ match( sub( ".*_10X","",colnames(DATA)) , 
+                                    sub( "10X","",colnames(unspliced2)) )]
+DATA@assays[["unspliced"]] <- CreateAssayObject(counts = unspliced2[,ann])
+rm()
+
+
+
+
+plan( multiprocess , workers=availableCores()-1)
+spliced <- future_lapply(  file_list, function(x){
+    data <- Matrix::t(Matrix::Matrix(
+      rhdf5::h5read(paste0(PATH_DATA,x), name = "/layers/spliced"),sparse = T))
+    colnames(data) <-  rhdf5::h5read(paste0(PATH_DATA,x),name = "col_attrs/CellID")
+    rownames(data) <-  rhdf5::h5read(paste0(PATH_DATA,x),name = "row_attrs/Gene")
+    gc()
+    rhdf5::h5closeAll()
+    return(data) 
+})
+spliced <- do.call(cbind,spliced)
+ann <- colnames(spliced)[ match( sub( ".*_10X","",colnames(DATA)) , 
+                                    sub( "10X","",colnames(spliced)) )]
+DATA@assays[["spliced"]] <- CreateAssayObject(counts = spliced[,ann])
+
+
+rhdf5::h5ls(paste0(PATH_DATA,file_list[1]))
+
+DATA@assays$RNA@scale.data <- matrix(0)
+
+saveRDS(DATA, "DATA_Velocity_New_Neurons.rds")
+```
+
+```{r}
+DATA<-readRDS("DATA_Velocity_New_Neurons.rds")
+
+
+library(SingleCellExperiment)
+DATA@assays$RNA@scale.data <- matrix(0)
+gc()
+
+sce <- as.SingleCellExperiment(DATA)
+sce@assays@data$counts
+sce@assays@data[["spliced"]] <- DATA@assays$spliced@data
+sce@assays@data[["unspliced"]] <- DATA@assays$unspliced@data
+
+
+library(velociraptor)
+genes_use <- rownames(DATA@assays$RNA@data)
+velo.out <- scvelo(list(X=DATA@assays$RNA@data[genes_use,],
+                        spliced=DATA@assays$spliced@data[genes_use,],
+                        unspliced=DATA@assays$unspliced@data[genes_use,]),
+                   subset.row=DATA@assays$RNA@var.features)
+velo.out
+
+saveRDS(velo.out,"velo_out_New_Neurons.rds")
+```
+
+```{r}
+velo.out <- readRDS("velo_out_New_Neurons.rds")
+
+library(scater)
+
+set.seed(100)
+#sce <- runPCA(sce, subset_row=top.hvgs)
+#sce <- runTSNE(sce, dimred="PCA")
+
+
+reducedDim(sce, "TSNE") <- DATA@reductions$umap_traj@cell.embeddings
+
+sce$velocity_pseudotime <- velo.out$velocity_pseudotime
+DATA$velocity_pseudotime <- sce$velocity_pseudotime
+plotTSNE(sce, colour_by="velocity_pseudotime")+ scale_fill_gradient2(low='grey90', mid ='grey70', high ='navy')
+
+embedded <- embedVelocity(reducedDim(sce, "TSNE"), velo.out)
+grid.df <- gridVectors(reducedDim(sce, "TSNE"), embedded)
+
+library(ggplot2)
+plotTSNE(sce, colour_by="velocity_pseudotime") +
+    geom_segment(data=grid.df, mapping=aes(x=start.UMAP_1, y=start.UMAP_2, 
+        xend=end.UMAP_1, yend=end.UMAP_2), arrow=arrow(length=unit(0.05, "inches")))
+
+plot_feat( DATA , red = "umap_traj",feat = "velocity_pseudotime",col = c("white","grey90","grey70","dodgerblue","darkorchid","firebrick1"))
+# segments(x0 = grid.df[,1],y0 = grid.df[,2],x1 =grid.df[,3],y1 = grid.df[,4])
+arrows(x0 = grid.df[,1],y0 = grid.df[,2],x1 =grid.df[,3],y1 = grid.df[,4],length=0.04,lwd=1.5)
+
+plot_feat( DATA , red = "umap_traj",feat = "velocity_pseudotime",col = c("white","grey90","grey70", "dodgerblue","dodgerblue4", "darkorchid","firebrick1"))
+# segments(x0 = grid.df[,1],y0 = grid.df[,2],x1 =grid.df[,3],y1 = grid.df[,4])
+arrows(x0 = grid.df[,1],y0 = grid.df[,2],x1 =grid.df[,3],y1 = grid.df[,4],length=0.04,lwd=1.5)
+
+
+pdf("../results/Trajectory/New_Velocity_Neurons.pdf",width = 4,height = 4,useDingbats = F)
+plotTSNE(sce, colour_by="velocity_pseudotime") +
+    geom_segment(data=grid.df, mapping=aes(x=start.UMAP_1, y=start.UMAP_2, 
+        xend=end.UMAP_1, yend=end.UMAP_2), arrow=arrow(length=unit(0.05, "inches")))
+dev.off()
+
+pdf("../results/Trajectory/New_Velocity_Neurons_2.pdf",width = 4,height = 4,useDingbats = F)
+mar=c(3,3,3,6)
+plot_feat( DATA , red = "umap_traj",feat = "velocity_pseudotime",col = c("white","grey90","grey70", "dodgerblue","dodgerblue4", "darkorchid","firebrick1"))
+# segments(x0 = grid.df[,1],y0 = grid.df[,2],x1 =grid.df[,3],y1 = grid.df[,4])
+arrows(x0 = grid.df[,1],y0 = grid.df[,2],x1 =grid.df[,3],y1 = grid.df[,4],length=0.04,lwd=0.3)
+dev.off()
+```
+
+
+
+#scvelo for Glia 
+```{r}
+library(future.apply)
+library(future)
+
+
+DATA <-readRDS("../data/New_Trajectory_Glia.rds")
+DATA
+
+
+PATH_DATA <- "../data/loom_files/"
+file_list <- list.files(PATH_DATA,full.names = F,pattern = ".loom")
+
+plan( multiprocess , workers=availableCores()-1)
+unspliced <- future_lapply(  file_list, function(x){
+    data <- Matrix::t(Matrix::Matrix(
+      rhdf5::h5read(paste0(PATH_DATA,x), name = "/layers/unspliced"),sparse = T))
+    colnames(data) <-  rhdf5::h5read(paste0(PATH_DATA,x),name = "col_attrs/CellID")
+    rownames(data) <-  rhdf5::h5read(paste0(PATH_DATA,x),name = "row_attrs/Gene")
+    gc()
+    rhdf5::h5closeAll()
+    return(data)
+})
+unspliced2 <- do.call(cbind,unspliced)
+rm(unspliced)
+gc()
+ann <- colnames(unspliced2)[ match( sub( ".*_10X","",colnames(DATA)) , 
+                                    sub( "10X","",colnames(unspliced2)) )]
+DATA@assays[["unspliced"]] <- CreateAssayObject(counts = unspliced2[,ann])
+rm()
+
+
+
+
+plan( multiprocess , workers=availableCores()-1)
+spliced <- future_lapply(  file_list, function(x){
+    data <- Matrix::t(Matrix::Matrix(
+      rhdf5::h5read(paste0(PATH_DATA,x), name = "/layers/spliced"),sparse = T))
+    colnames(data) <-  rhdf5::h5read(paste0(PATH_DATA,x),name = "col_attrs/CellID")
+    rownames(data) <-  rhdf5::h5read(paste0(PATH_DATA,x),name = "row_attrs/Gene")
+    gc()
+    rhdf5::h5closeAll()
+    return(data) 
+})
+spliced <- do.call(cbind,spliced)
+ann <- colnames(spliced)[ match( sub( ".*_10X","",colnames(DATA)) , 
+                                    sub( "10X","",colnames(spliced)) )]
+DATA@assays[["spliced"]] <- CreateAssayObject(counts = spliced[,ann])
+
+
+rhdf5::h5ls(paste0(PATH_DATA,file_list[1]))
+
+DATA@assays$RNA@scale.data <- matrix(0)
+
+saveRDS(DATA, "New_DATA_Velocity_Glia.rds")
+```
+
+
+```{r}
+DATA<-readRDS("New_DATA_Velocity_Glia.rds")
+
+
+library(SingleCellExperiment)
+DATA@assays$RNA@scale.data <- matrix(0)
+gc()
+
+sce <- as.SingleCellExperiment(DATA)
+sce@assays@data$counts
+sce@assays@data[["spliced"]] <- DATA@assays$spliced@data
+sce@assays@data[["unspliced"]] <- DATA@assays$unspliced@data
+
+
+library(velociraptor)
+genes_use <- rownames(DATA@assays$RNA@data)
+velo.out <- scvelo(list(X=DATA@assays$RNA@data[genes_use,],
+                        spliced=DATA@assays$spliced@data[genes_use,],
+                        unspliced=DATA@assays$unspliced@data[genes_use,]),
+                   subset.row=DATA@assays$RNA@var.features)
+velo.out
+
+saveRDS(velo.out,"New_velo_out_Glia.rds")
+```
+
+```{r}
+#velo.out <- readRDS("New_velo_out_Glia.rds")
+
+library(scater)
+
+set.seed(100)
+#sce <- runPCA(sce, subset_row=top.hvgs)
+#sce <- runTSNE(sce, dimred="PCA")
+
+reducedDim(sce, "TSNE") <- DATA@reductions$umap_traj@cell.embeddings
+
+sce$velocity_pseudotime <- velo.out$velocity_pseudotime
+DATA$velocity_pseudotime <- sce$velocity_pseudotime
+plotTSNE(sce, colour_by="velocity_pseudotime")
+
+embedded <- embedVelocity(reducedDim(sce, "TSNE"), velo.out)
+grid.df <- gridVectors(reducedDim(sce, "TSNE"), embedded)
+
+#Run grid.df alone and see what are the names of "start"" and "end"" for genom_segment() below. In case error of "start.1 not found"
+
+library(ggplot2)
+plotTSNE(sce, colour_by="velocity_pseudotime") +
+    geom_segment(data=grid.df, mapping=aes(x=start.umap_traj_1, y=start.umap_traj_2, 
+        xend=end.umap_traj_1, yend=end.umap_traj_2), arrow=arrow(length=unit(0.05, "inches")))
+
+
+pdf("../results/Trajectory/New_Velocity_Glia.pdf",width = 4,height = 4,useDingbats = F)
+plotTSNE(sce, colour_by="velocity_pseudotime") +
+    geom_segment(data=grid.df, mapping=aes(x=start.umap_traj_1, y=start.umap_traj_2, 
+        xend=end.umap_traj_1, yend=end.umap_traj_2), arrow=arrow(length=unit(0.05, "inches")))
+dev.off()
+
+pdf("../results/Trajectory/New_Velocity_Glia_3.pdf",width = 4,height = 4,useDingbats = F)
+mar=c(3,3,3,6)
+plot_feat( DATA , red = "umap_traj",feat = "velocity_pseudotime",col = c("white","grey90","grey70", "dodgerblue","dodgerblue4", "darkorchid","firebrick1"))
+# segments(x0 = grid.df[,1],y0 = grid.df[,2],x1 =grid.df[,3],y1 = grid.df[,4])
+arrows(x0 = grid.df[,1],y0 = grid.df[,2],x1 =grid.df[,3],y1 = grid.df[,4],length=0.04,lwd=0.3)
+dev.off()
+```
+
+
+#scvelo for Full neural cells 
+```{r}
+library(future.apply)
+library(future)
+
+
+DATA <-readRDS("../data/DATA_Trajectory_all.rds")
+DATA
+
+
+PATH_DATA <- "../data/loom_files/"
+file_list <- list.files(PATH_DATA,full.names = F,pattern = ".loom")
+
+plan( multiprocess , workers=availableCores()-1)
+unspliced <- future_lapply(  file_list, function(x){
+    data <- Matrix::t(Matrix::Matrix(
+      rhdf5::h5read(paste0(PATH_DATA,x), name = "/layers/unspliced"),sparse = T))
+    colnames(data) <-  rhdf5::h5read(paste0(PATH_DATA,x),name = "col_attrs/CellID")
+    rownames(data) <-  rhdf5::h5read(paste0(PATH_DATA,x),name = "row_attrs/Gene")
+    gc()
+    rhdf5::h5closeAll()
+    return(data)
+})
+unspliced2 <- do.call(cbind,unspliced)
+rm(unspliced)
+gc()
+ann <- colnames(unspliced2)[ match( sub( ".*_10X","",colnames(DATA)) , 
+                                    sub( "10X","",colnames(unspliced2)) )]
+DATA@assays[["unspliced"]] <- CreateAssayObject(counts = unspliced2[,ann])
+rm()
+
+
+
+
+plan( multiprocess , workers=availableCores()-1)
+spliced <- future_lapply(  file_list, function(x){
+    data <- Matrix::t(Matrix::Matrix(
+      rhdf5::h5read(paste0(PATH_DATA,x), name = "/layers/spliced"),sparse = T))
+    colnames(data) <-  rhdf5::h5read(paste0(PATH_DATA,x),name = "col_attrs/CellID")
+    rownames(data) <-  rhdf5::h5read(paste0(PATH_DATA,x),name = "row_attrs/Gene")
+    gc()
+    rhdf5::h5closeAll()
+    return(data) 
+})
+spliced <- do.call(cbind,spliced)
+ann <- colnames(spliced)[ match( sub( ".*_10X","",colnames(DATA)) , 
+                                    sub( "10X","",colnames(spliced)) )]
+DATA@assays[["spliced"]] <- CreateAssayObject(counts = spliced[,ann])
+
+
+rhdf5::h5ls(paste0(PATH_DATA,file_list[1]))
+
+DATA@assays$RNA@scale.data <- matrix(0)
+
+saveRDS(DATA, "DATA_Velocity_All.rds")
+```
+
+```{r}
+#DATA<-readRDS("DATA_Velocity_Glia.rds")
+
+
+library(SingleCellExperiment)
+DATA@assays$RNA@scale.data <- matrix(0)
+gc()
+
+sce <- as.SingleCellExperiment(DATA)
+sce@assays@data$counts
+sce@assays@data[["spliced"]] <- DATA@assays$spliced@data
+sce@assays@data[["unspliced"]] <- DATA@assays$unspliced@data
+
+
+library(velociraptor)
+genes_use <- rownames(DATA@assays$RNA@data)
+velo.out <- scvelo(list(X=DATA@assays$RNA@data[genes_use,],
+                        spliced=DATA@assays$spliced@data[genes_use,],
+                        unspliced=DATA@assays$unspliced@data[genes_use,]),
+                   subset.row=DATA@assays$RNA@var.features)
+velo.out
+
+saveRDS(velo.out,"velo_out.rds")
+```
+
+```{r}
+#velo.out <- readRDS("velo_out.rds")
+
+library(scater)
+
+set.seed(100)
+#sce <- runPCA(sce, subset_row=top.hvgs)
+#sce <- runTSNE(sce, dimred="PCA")
+
+
+reducedDim(sce, "TSNE") <- DATA@reductions$umap_harmony@cell.embeddings
+
+sce$velocity_pseudotime <- velo.out$velocity_pseudotime
+plotTSNE(sce, colour_by="velocity_pseudotime")
+
+embedded <- embedVelocity(reducedDim(sce, "TSNE"), velo.out)
+grid.df <- gridVectors(reducedDim(sce, "TSNE"), embedded)
+
+#Run grid.df alone and see what are the names of "start"" and "end"" for genom_segment() below. In case error of "start.1 not found"
+
+library(ggplot2)
+plotTSNE(sce, colour_by="velocity_pseudotime") +
+    geom_segment(data=grid.df, mapping=aes(x=start.UMAP_1, y=start.UMAP_2, 
+        xend=end.UMAP_1, yend=end.UMAP_2), arrow=arrow(length=unit(0.05, "inches")))
+
+
+png("../results/Trajectory/Velocity_All.png",width = 800*3,height = 800*3,res = 300)
+plotTSNE(sce, colour_by="velocity_pseudotime") +
+    geom_segment(data=grid.df, mapping=aes(x=start.UMAP_1, y=start.UMAP_2, 
+        xend=end.UMAP_1, yend=end.UMAP_2), arrow=arrow(length=unit(0.05, "inches")))
+dev.off()
+```
+
+
+
+
+
+
+
+
+#scvelo for NPCs
+```{r}
+library(future.apply)
+library(future)
+
+
+DATA <-readRDS("../data/DATA_NPCs.rds")
+DATA 
+
+
+PATH_DATA <- "../data/loom_files/"
+file_list <- list.files(PATH_DATA,full.names = F,pattern = ".loom")
+
+plan( multiprocess , workers=availableCores()-1)
+unspliced <- future_lapply(  file_list, function(x){
+    data <- Matrix::t(Matrix::Matrix(
+      rhdf5::h5read(paste0(PATH_DATA,x), name = "/layers/unspliced"),sparse = T))
+    colnames(data) <-  rhdf5::h5read(paste0(PATH_DATA,x),name = "col_attrs/CellID")
+    rownames(data) <-  rhdf5::h5read(paste0(PATH_DATA,x),name = "row_attrs/Gene")
+    gc()
+    rhdf5::h5closeAll()
+    return(data)
+})
+unspliced2 <- do.call(cbind,unspliced)
+rm(unspliced)
+gc()
+ann <- colnames(unspliced2)[ match( sub( ".*_10X","",colnames(DATA)) , 
+                                    sub( "10X","",colnames(unspliced2)) )]
+DATA@assays[["unspliced"]] <- CreateAssayObject(counts = unspliced2[,ann])
+rm()
+
+
+
+
+plan( multiprocess , workers=availableCores()-1)
+spliced <- future_lapply(  file_list, function(x){
+    data <- Matrix::t(Matrix::Matrix(
+      rhdf5::h5read(paste0(PATH_DATA,x), name = "/layers/spliced"),sparse = T))
+    colnames(data) <-  rhdf5::h5read(paste0(PATH_DATA,x),name = "col_attrs/CellID")
+    rownames(data) <-  rhdf5::h5read(paste0(PATH_DATA,x),name = "row_attrs/Gene")
+    gc()
+    rhdf5::h5closeAll()
+    return(data) 
+})
+spliced <- do.call(cbind,spliced)
+ann <- colnames(spliced)[ match( sub( ".*_10X","",colnames(DATA)) , 
+                                    sub( "10X","",colnames(spliced)) )]
+DATA@assays[["spliced"]] <- CreateAssayObject(counts = spliced[,ann])
+
+
+rhdf5::h5ls(paste0(PATH_DATA,file_list[1]))
+
+DATA@assays$RNA@scale.data <- matrix(0)
+
+saveRDS(DATA, "DATA_Velocity_NPCs.rds")
+```
+
+```{r}
+DATA<-readRDS("DATA_Velocity_NPCs.rds")
+
+DATA <- RunUMAP(DATA, dims = 1:50, #50
+                reduction = "harmony",
+                reduction.name = "umap_traj",
+                min.dist = 0.1, #0.01
+                spread = .3,# .3
+                metric = "correlation",
+                n.neighbors = 15, #15
+                repulsion.strength = 0.05, #0.1
+                negative.sample.rate = 20, #20
+                n.epochs = 100, #100
+                n.components = 2 )
+plot_meta(x = DATA,red = "umap_traj",feat = "seurat_clusters",frame=F,label = T)
+
+
+library(SingleCellExperiment)
+DATA@assays$RNA@scale.data <- matrix(0)
+gc()
+
+sce <- as.SingleCellExperiment(DATA)
+sce@assays@data$counts
+sce@assays@data[["spliced"]] <- DATA@assays$spliced@data
+sce@assays@data[["unspliced"]] <- DATA@assays$unspliced@data
+
+
+library(velociraptor)
+genes_use <- rownames(DATA@assays$RNA@data)
+velo.out <- scvelo(list(X=DATA@assays$RNA@data[genes_use,],
+                        spliced=DATA@assays$spliced@data[genes_use,],
+                        unspliced=DATA@assays$unspliced@data[genes_use,]),
+                   subset.row=DATA@assays$RNA@var.features)
+velo.out
+
+saveRDS(velo.out,"velo_out_NPCs.rds")
+```
+
+```{r}
+velo.out <- readRDS("velo_out_NPCs.rds")
+
+library(scater)
+
+set.seed(100)
+#sce <- runPCA(sce, subset_row=top.hvgs)
+#sce <- runTSNE(sce, dimred="PCA")
+
+
+reducedDim(sce, "TSNE") <- DATA@reductions$umap_traj@cell.embeddings
+reducedDim(sce, "TSNE") <- DATA@reductions$umap_harmony@cell.embeddings
+
+sce$velocity_pseudotime <- velo.out$velocity_pseudotime
+DATA$velocity_pseudotime <- sce$velocity_pseudotime
+plotTSNE(sce, colour_by="velocity_pseudotime")
+
+embedded <- embedVelocity(reducedDim(sce, "TSNE"), velo.out)
+grid.df <- gridVectors(reducedDim(sce, "TSNE"), embedded)
+
+#Run grid.df alone and see what are the names of "start"" and "end"" for genom_segment() below. In case error of "start.1 not found"
+
+library(ggplot2)
+plotTSNE(sce, colour_by="velocity_pseudotime") +
+    geom_segment(data=grid.df, mapping=aes(x=start.UMAP_1, y=start.UMAP_2, 
+        xend=end.UMAP_1, yend=end.UMAP_2), arrow=arrow(length=unit(0.05, "inches")))
+
+
+png("../results/Trajectory/Velocity_NPCs.png",width = 800*3,height = 800*3,res = 300)
+plotTSNE(sce, colour_by="velocity_pseudotime") +
+    geom_segment(data=grid.df, mapping=aes(x=start.UMAP_1, y=start.UMAP_2, 
+        xend=end.UMAP_1, yend=end.UMAP_2), arrow=arrow(length=unit(0.05, "inches")))
+dev.off()
+
+png("../results/Trajectory/Velocity_NPCs_3.png",width = 800*3,height = 800*3,res = 300)
+mar=c(3,3,3,6)
+plot_feat( DATA, red = "umap_harmony",feat = "velocity_pseudotime",col = c("white","grey90","grey70", "dodgerblue","dodgerblue4", "darkorchid","firebrick1"))
+# segments(x0 = grid.df[,1],y0 = grid.df[,2],x1 =grid.df[,3],y1 = grid.df[,4])
+arrows(x0 = grid.df[,1],y0 = grid.df[,2],x1 =grid.df[,3],y1 = grid.df[,4],length=0.04,lwd=1.5)
+dev.off()
+
+
+```
+

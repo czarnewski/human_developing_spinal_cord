@@ -1,0 +1,347 @@
+---
+title: "Trajectory"
+output: html_document
+editor_options: 
+  chunk_output_type: console
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## R Markdown
+
+This is an R Markdown document. Markdown is a simple formatting syntax for authoring HTML, PDF, and MS Word documents. For more details on using R Markdown see <http://rmarkdown.rstudio.com>.
+
+When you click the **Knit** button a document will be generated that includes both content as well as the output of any embedded R code chunks within the document. You can embed an R code chunk like this:
+
+```{r cars}
+summary(cars)
+```
+
+## Including Plots
+
+```{r pressure, echo=FALSE}
+library(Seurat)
+library(biomaRt)
+library(rafalib)
+library(scales)
+library(harmony)
+#remotes::install_github("czarnewski/niceRplots")
+library(niceRplots)
+library(dplyr)
+library(ggplot2)
+#library(velociraptor)
+
+
+pal <- c(RColorBrewer::brewer.pal(9,"Set1"),RColorBrewer::brewer.pal(9,"Pastel1"),RColorBrewer::brewer.pal(8,"Accent"),RColorBrewer::brewer.pal(8,"Set2"),RColorBrewer::brewer.pal(8,"Pastel2") ,scales::hue_pal()(8))
+
+```
+
+
+#Trajectory analysis
+#Subset all revelant cells if necessary
+```{r}
+temp2 <- readRDS("../data/DATA_Trajectory_all.rds")
+temp2 <- SetIdent(temp2, value = "RNA_snn_res.1.2")
+#temp2 <- SetIdent(temp2, value = "Celltypes")
+gc()
+
+
+#Creates output folder
+output_folder <- "../results/Trajectory"
+if(!dir.exists(output_folder)){dir.create(output_folder,recursive = T)}
+
+
+```
+
+# Investigating All lineages
+```{r}
+temp2 <- RunUMAP(temp2, dims = 1:50, #50
+                reduction = "harmony",
+                reduction.name = "umap_traj",
+                min.dist = 0.1, #0.01
+                spread = .3,# .3
+                metric = "euclidean",
+                n.neighbors = 10, #10
+                repulsion.strength = 0.2, #0.05
+                negative.sample.rate = 5, #20
+                n.epochs = 100, #100
+                n.components = 2 )
+
+plot_meta(x = temp2,red = "umap_traj",feat = "seurat_clusters",frame=F,label = T)
+
+#Do the same umap with "reduction.name=umap_harmnony" for the abstract graph illustration
+temp2 <- RunUMAP(temp2, dims = 1:50, #50
+                reduction = "harmony",
+                reduction.name = "umap_harmony",
+                min.dist = 0.1, #0.01
+                spread = .3,# .3
+                metric = "euclidean",
+                n.neighbors = 10, #10
+                repulsion.strength = 0.2, #0.05
+                negative.sample.rate = 5, #20
+                n.epochs = 100, #100
+                n.components = 2 )
+
+plot_meta(x = temp2,red = "umap_traj",feat = "seurat_clusters",frame=F,label = T)
+
+```
+
+
+#Redo graphic abstract 
+
+```{r}
+temp2 <- FindNeighbors(temp2,
+                      reduction = "harmony",
+                      assay = "RNA",
+                      nn.method = "annoy",
+                      annoy.metric = "cosine",
+                      dims = 1:50, #50
+                      k.param=100)
+temp2 <- FindClusters(temp2,resolution = 2, graph.name = "RNA_snn")
+plot_meta(x = temp2,red = "umap_traj",feat = "RNA_snn_res.2",frame=F,label = T)
+plot_meta(x = temp2,red = "umap_traj",feat = "seurat_clusters",frame=F,label = T)
+
+library(rafalib)
+library(igraph)
+
+```
+
+
+```{r}
+g2 <- graph_abstraction( temp2 , red = "umap_harmony" , clustering = "seurat_clusters" , 
+                         graph = "RNA_snn", cutoff = 0)
+
+probs <- matrix( g2$p.Freq , sqrt( nrow(g2) ) , sqrt( nrow(g2) ))
+colnames(probs) <- unique(g2$p.Var)
+rownames(probs) <- unique(g2$p.Var)
+# probs[probs < 0.008] <- 0
+library(igraph)
+
+g3 <- graph_from_adjacency_matrix( probs , weighted = T , diag = T , mode="undirected")
+centroids <- g2[g2$s==g2$p.Var,]
+
+mm <- mst(g3,weights =  1/E(g3)$weight)
+eee <- as.data.frame(as_edgelist(mm))
+eee$x0 <- centroids[ match(eee[,1],centroids[,1]),"x0" ]
+eee$y0 <- centroids[ match(eee[,2],centroids[,2]) ,"x1"]
+eee$x1 <- centroids[ match(eee[,1],centroids[,1]),"y0" ]
+eee$y1 <- centroids[ match(eee[,2],centroids[,2]) ,"y1"]
+
+```
+
+
+```{r}
+pdf("../results/Trajectory/graph_Glia.pdf",width = 4*2,height = 4*2,useDingbats = F)
+mypar(2,2)
+plot_meta(x = temp2,red = "umap_harmony",feat = "seurat_clusters",frame=F,col = pal,label = T,main="minimum spanning tree (MST)")
+segments(x0 = eee[,3],x1 = eee[,4],y0 = eee[,5],y1 = eee[,6],lwd=2)
+
+plot_meta(x = temp2,red = "umap_harmony",feat = "seurat_clusters",frame=F,col = pal,label = T)
+mypath <- igraph::shortest_paths( mm, from = "2", to = "6" , weights = 1/E(mm)$weight )
+mypath$vpath[[1]]
+sx <- spline(smooth.spline(1:length(mypath$vpath[[1]]), centroids[mypath$vpath[[1]],c("x0")],spar = 0.1))
+sy <- spline(smooth.spline(1:length(mypath$vpath[[1]]), centroids[mypath$vpath[[1]],c("y0")],spar = 0.1))
+lines(sx[[2]], sy[[2]], col = 'black', lwd = 2)
+
+mypath <- igraph::shortest_paths( mm, from = "2", to = "15" , weights = 1/E(mm)$weight )
+mypath$vpath[[1]]
+sx <- spline(smooth.spline(1:length(mypath$vpath[[1]]), centroids[mypath$vpath[[1]],c("x0")],spar = 0.1))
+sy <- spline(smooth.spline(1:length(mypath$vpath[[1]]), centroids[mypath$vpath[[1]],c("y0")],spar = 0.1))
+lines(sx[[2]], sy[[2]], col = 'black', lwd = 2)
+
+mypath <- igraph::shortest_paths( mm, from = "2", to = "16" , weights = 1/E(mm)$weight )
+mypath$vpath[[1]]
+sx <- spline(smooth.spline(1:length(mypath$vpath[[1]]), centroids[mypath$vpath[[1]],c("x0")],spar = 0.1))
+sy <- spline(smooth.spline(1:length(mypath$vpath[[1]]), centroids[mypath$vpath[[1]],c("y0")],spar = 0.1))
+lines(sx[[2]], sy[[2]], col = 'black', lwd = 2)
+
+
+dev.off()
+
+saveRDS(temp2,"../data/New_Trajectory_Glia.rds")
+```
+
+
+
+#################################################
+### Do branching heatmaps and genes after selecting relevant clusters (EPC: 2->0 ->8 or ASC/OPC: 2->4; ASC:4->18; OPCs:4->9 )
+```{r}
+sel <- temp2$seurat_clusters %in% c(2,0,8,10,3,13,21,6,4,18,16)
+#sel <- DATA$seurat_clusters %in% c(3, 8, 39)
+
+temp <- temp2[,sel]
+
+temp <- RunUMAP(temp, dims = 1:50, #50
+                reduction = "harmony",
+                reduction.name = "umap_traj",
+                min.dist = 0.1, #0.01
+                spread = .3,# .3
+                metric = "euclidean",
+                n.neighbors = 10, #10
+                repulsion.strength = 1, #0.05
+                negative.sample.rate = 10, #20
+                n.epochs = 100, #100
+                n.components = 2 )
+
+#png("../results/Trajectory/branch_umap_Neurons_17_16_15.png",width = 800*4,height = 800*4,res = 300)
+#mypar(4,4) # To make 4x4 images in one figure
+plot_meta(x = temp,red = "umap_traj",feat = "seurat_clusters",frame=F,label = T)
+#dev.off()
+
+dimred <- temp@reductions$umap_traj@cell.embeddings
+clustering <- factor(temp$seurat_clusters)
+dimvis <- temp@reductions$umap_traj@cell.embeddings
+
+library(slingshot)
+
+set.seed(1)
+lineages <- getLineages(data = dimred,
+                        clusterLabels = clustering,
+                        start.clus = "2",
+                        end.clus=c("6","16"))
+lineages
+
+lineages@reducedDim <- dimvis
+curves <- getCurves(lineages, thresh = 0.001, stretch = .000001, allow.breaks = T,approx_points = 30) #Can try remove approx_points=30
+pseudotime <- slingPseudotime(curves, na = FALSE)
+cellWeights <- slingCurveWeights(curves)
+
+pdf("../results/Trajectory/trajectory_path_Glia_EPCs_ASCs.pdf",width = 4,height = 4,useDingbats = F)
+#mypar(4,4) #plot 4 x 4 images per figure
+plot_meta(x = temp,red = "umap_traj",feat = "seurat_clusters",frame=F,label = T)
+# lines(lineages, lwd = 2, col = c('black',"firebrick","navy","darkgreen") )
+lines(curves, lwd = 3, col = c('black',"firebrick","navy","darkgreen"))
+dev.off()
+
+
+set.seed(1)
+sel2 <- sample( colnames(temp2[,sel]) , size = 1000)
+# sel2 <- colnames(DATA[,sel])
+counts <- temp2@assays$RNA@counts[Matrix::rowSums(temp2@assays$RNA@counts[,sel] > 1) > 50 ,sel2]
+dim(counts)
+```
+
+# Plotting expression for up to 100 top differentially expressed genes
+
+```{r}
+library(tradeSeq)
+sce <- fitGAM(counts = counts,
+              pseudotime = pseudotime[sel2,],
+              cellWeights = cellWeights[sel2,],
+              nknots = 5, verbose = T,parallel=T)
+saveRDS(sce, "../data/tradeSeq_ASCs_EPCs.rds")
+#sce<- readRDS("../data/tradeSeq_2_0_4_8.rds")
+gc()
+
+dim(pseudotime[sel2,])
+dim(cellWeights[sel2,])
+dim(counts)
+
+patternRes <- patternTest(sce)
+patternRes$pvalue[is.na(patternRes$pvalue)] <- 1
+patternRes <- patternRes[order(patternRes$waldStat,decreasing = T),]
+patternRes$FDR <- p.adjust(patternRes$pvalue,method = "BH")
+patternRes <- patternRes[ patternRes$FDR < 0.05 , ]
+head(patternRes,100) #Check the top 100 genes 
+
+gene_list <- rownames(patternRes)[1:min(100,nrow(patternRes))] #Check the top 100 genes 
+lims <- quantile(pseudotime,c(0.02,.98) )
+pt <- slingPseudotime(curves, na = FALSE)
+sum(is.nan(pt))
+
+
+
+res <- t(sapply(gene_list,
+              pseudotime = pseudotime,
+              cellWeights = cellWeights,
+              lims=lims,
+              mycounts=temp@assays$RNA@data[gene_list,],
+              function(gene,mycounts,pseudotime,cellWeights,lims) {
+    ll <- lapply( 1:ncol(pseudotime),function(i){
+    l1 <- (cellWeights[,i] == 1 ) & (pseudotime[,i] > lims[1]) & (pseudotime[,i] < lims[2])
+    l1 <- colnames(temp)[l1] #temp or temp2, depend on what was used above
+    sm <- spline(smooth.spline( pseudotime[ l1, i ], mycounts[gene,l1], nknots = 20,spar = .8),n = 20)
+  })
+  return( c( rev( ll[[1]]$y ) ,rep(NA,1), ll[[2]]$y ) )
+}))
+```
+
+# Plot the heatmap
+```{r}
+pdf("../results/Trajectory/Heatmap_ASCs_EPCs.pdf",width = 4,height = 13,useDingbats = F) #For top 20 genes, width=3, height=4
+mypar(1,1, par(2,2,2,2))
+x <- t(apply(res,1,function(x){scale(x,T,T)}))
+to_order <- apply(x,1,function(x){ mean( (1:length(x))[order(x,decreasing = T)][1] )})
+to_order <- apply( (res[,1:50] - res[,52:41]),1,function(x){ mean( (1:length(x))[order(x,decreasing = F)][1] )})
+to_order <- apply(x,1,function(x){ which.max(x) })
+o <- order(to_order)
+o <- hclust(as.dist((1-cor(t(res),use = "pairwise.complete.obs"))/2),method = "complete" )$order
+par(mar=c(2,2,3,6))
+image( t(x[o,][nrow(res):1,]) ,axes=F,frame=F , col=c("grey95",colorRampPalette(c("grey95","grey70","firebrick","firebrick4"))(90)))
+text( par("usr")[2], seq(nrow(res),0,length.out = nrow(res)) / nrow(res) , labels = rownames(x)[o] , pos=4 ,xpd=T , cex=.8)
+text( par("usr")[1], par("usr")[4]-diff(par("usr")[4:3])/30, labels = "lineage 2" , adj= c(0,0),xpd=T , cex=.8 , pos=3)
+text( par("usr")[2], par("usr")[4]-diff(par("usr")[4:3])/30, labels = "lineage 1" , adj= c(1,0),xpd=T , cex=.8, pos=3)
+text( mean(par("usr")[1:2]), par("usr")[4]-diff(par("usr")[4:3])/30, labels = "origin" , adj= c(1,0),xpd=T , cex=.8, pos=3)
+
+x <- curves@lineages$Lineage1
+text( seq(mean(par("usr")[1:2]),par("usr")[1],length.out = length(x)), par("usr")[4], labels = x , adj= c(0,0),xpd=T , cex=.8 , pos=3)
+x <- curves@lineages$Lineage2
+text( seq(mean(par("usr")[1:2]),par("usr")[2],length.out = length(x)), par("usr")[4], labels = x , adj= c(0,0),xpd=T , cex=.8 , pos=3)
+dev.off()
+
+
+```
+
+
+# Plotting expression for one gene
+```{r}
+pdf("../results/Trajectory/Gene_Glia_4_18_9_16_7_HES1.pdf",width = 4,height = 4,useDingbats = F)
+mypar(1,1,mar = c(3,3,3,3))
+gene <- "SOX4"
+all <- c(sce@colData$tradeSeq$dm$t1,sce@colData$tradeSeq$dm$t2)
+lims <- quantile(pseudotime,c(0.02,.98) )
+plot( 0,cex=.1,pch=16,col="purple",type="n",las=1,xlim=lims,
+      ylim=range(temp@assays$RNA@data[gene,rownames(pseudotime)]) )
+for(i in 1:ncol(pseudotime)){
+  pt1 <- pseudotime[,i]
+  l1 <- (cellWeights[,i] == 1 ) & (pt1 > lims[1]) & (pt1 < lims[2])
+  l1 <- colnames(temp)[l1] #temp or temp2, depend on what was used above
+  points( pt1[ l1 ],cex=.2,pch=16,col=c("cyan4","orange3")[i],
+      temp@assays$RNA@data[gene,l1]+runif(n = length(l1),0.0,0.02))
+  sm <- smooth.spline( pt1[ l1 ],
+                     temp@assays$RNA@data[gene,l1], nknots = 20,spar = .8)
+  lines(sm$x,sm$y*1.3,lwd=3,col=c("navy","salmon2")[i] )
+  lines(sm$x,sm$y*1.3,lwd=.5,col="black")
+}
+dev.off()
+
+
+
+```
+
+# Plot relevant genes 
+```{r}
+pdf("../results/Trajectory/Genes/ASCs_EPCs_genes_Feature.pdf",width = 3*4,height = 3*4,useDingbats = F)
+
+feat_list <- c("EFCC1", "TKTL1", "ZIC2", "GSN", "WNT3", "GFAP", "MSX1", "TPBG", "FOXJ1", "GRM3", "TNC", "FABP5", "AQP4")
+
+rafalib::mypar(4,4,mar=c(0.5,0.5,2,0.5))
+for(i in feat_list){plot_feat(x = temp2,red = "umap_harmony",feat = i,frame=F, col = c("grey90", "grey80", "grey60", "grey40", "navy", "black"))}
+dev.off()
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+

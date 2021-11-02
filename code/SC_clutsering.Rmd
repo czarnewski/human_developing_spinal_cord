@@ -1,0 +1,537 @@
+---
+output: html_document
+editor_options: 
+  chunk_output_type: console
+---
+
+
+
+```{r}
+library(Seurat)
+library(biomaRt)
+library(rafalib)
+library(scales)
+library(harmony)
+#remotes::install_github("czarnewski/niceRplots")
+library(niceRplots)
+library(dplyr)
+library(ggplot2)
+#library(velociraptor)
+
+
+pal <- c(RColorBrewer::brewer.pal(9,"Set1"),RColorBrewer::brewer.pal(9,"Pastel1"),RColorBrewer::brewer.pal(8,"Accent"),RColorBrewer::brewer.pal(8,"Set2"),RColorBrewer::brewer.pal(8,"Pastel2") ,scales::hue_pal()(8))
+```
+
+
+
+
+```{r}
+opt <- list(
+  species_use="hsapiens",
+  assay="RNA",
+  output_path=".",
+  columns_metadata="SampleID,Age,orig.ident,PassedQC,PassedQC_MT_ratio,PassedQC_TotalUMI,PassedQC_UnsplicedRatio"
+)
+
+
+if( file.exists("SC_metadata_QC.rds")){
+  DATA@meta.data <- readRDS("SC_metadata_QC.rds")
+} else {
+  #############################################
+  ### CALCULATE PERCENTAGE OF GENE FAMILIES ###
+  #############################################
+  cat("\nCalculating percentage of mitocondrial/ribosomal genes ...\n")
+  Gene.groups <- substring(rownames(x = DATA@assays[[opt$assay]]@counts),1,3)
+  seq_depth <- Matrix::colSums(DATA@assays[[opt$assay]]@counts)
+  temp <- rowsum(as.matrix(DATA@assays[[opt$assay]]@counts),Gene.groups)
+  perc <- sort(apply( t(temp) / seq_depth,2,median) ,decreasing = T)*100
+  tot <- sort(rowSums(temp)/sum(temp),decreasing = T)*100
+  
+  #Compute the relative expression of each gene per cell
+  rel_expression <- Matrix::t( Matrix::t(DATA@assays[[opt$assay]]@counts) / (Matrix::colSums(DATA@assays[[opt$assay]]@counts)) ) * 100
+  most_expressed <- sort(apply(rel_expression,1,mean),T)[1:100] / ncol(DATA)
+  
+  png(filename = paste0(opt$output_path,"/Gene_familty proportions.png"),width = 600*3,height = 4*600,res = 150)
+  mypar(4,1,mar=c(5,5,2,1))
+  boxplot( as.matrix(Matrix::t(rel_expression[names(most_expressed),])),cex=.1,outline=T,las=2,main="% total count per cell",col=hue_pal()(100))
+  boxplot( (t(temp)/seq_depth) [,names(perc)[1:100]]*100,outline=T,las=2,main="% reads per cell",col=hue_pal()(100))
+  boxplot(t(temp)[,names(perc)[1:100]], outline=T,las=2,main="reads per cell",col=hue_pal()(100) )
+  barplot(tot[names(tot)[1:100]],las=2,xaxs="i",main="Total % reads (all cells)",col=hue_pal()(100))
+  invisible(dev.off())
+  
+  for(i in unique( c("rpl","rps","hb[ab]","mito",unlist(strsplit(casefold(opt$plot_gene_family),","))))){
+    cat(i,"\t")
+    family.genes <- rownames(DATA@assays[[opt$assay]]@counts)[grep(pattern = paste0("^",ifelse(i=="mito","mt-",i)), x = casefold(rownames(DATA@assays[[opt$assay]]@counts)), value = F)]
+    if(length(family.genes)>1){
+      DATA <- PercentageFeatureSet(DATA,features = family.genes,assay = opt$assay,col.name = paste0("perc_",ifelse(i=="mt-","mito",i)) )
+    } else {
+      DATA <- PercentageFeatureSet(DATA,pattern = i,assay = opt$assay,col.name = paste0("perc_",ifelse(i=="mt-","mito",i)) )
+      }
+  }
+  rm("temp","perc","tot","Gene.groups","i","indexes")
+  invisible(gc())
+  #---------
+  
+
+  
+  
+  
+  ############################################
+  ### CALCULATING GENE BIOTYPE PERCENTAGES ###
+  ############################################
+  
+  #If found error in Error in curl::curl_fetch_memory(url, handle = handle) : Could not resolve host: jul2019.archive.ensembl.org, then run biomaRt::listEnsemblArchives() in the console then choose one of them to put in your code above (replace this: `jul2019.archive.ensembl.org`) 
+  
+  cat("\nCalculating gene biotype percentages ...\n")
+  mart = useMart("ensembl", dataset = paste0(opt$species_use,"_gene_ensembl"),host="jul2019.archive.ensembl.org")
+  annot <- getBM(c("external_gene_name","gene_biotype","transcript_biotype","chromosome_name"),mart = mart)
+  annot[,"chromosome_name"] <- paste0("Chr_",annot[,"chromosome_name"])
+  annot[ !grepl("^Chr_[123456789XYMT]",annot[,"chromosome_name"]) ,"chromosome_name"] <- "other"
+  
+  for(z in c("gene_biotype","transcript_biotype","chromosome_name")){
+  
+    item <- annot[match(rownames(DATA@assays[[opt$assay]]@counts) , annot[,1]),z]
+    item[is.na(item)] <- "unknown"
+    
+    png(filename = paste0(opt$output_path,"/",z,"_proportions.png"),width = 600*3,height = 600,res = 150)
+    mypar(1,3,mar=c(4,2,2,1))
+    pie(sort(table(item),decreasing = T), clockwise = T,col = hue_pal()(length(unique(item))))
+    title("before filtering")
+    par(mar=c(10,2,2,1))
+    barplot(sort(table(item),decreasing = T),las=2,xaxs="i",main="Total reads (all cells)",col=hue_pal()(100))
+    
+    temp <- rowsum(as.matrix(DATA@assays[[opt$assay]]@counts),group=item)
+    o <- order(apply(temp,1,median),decreasing = T)
+    boxplot( (t(temp)/Matrix::colSums(DATA@assays[[opt$assay]]@counts))[,o]*100,outline=F,las=2,main="% reads per cell",col=hue_pal()(100))
+    invisible(dev.off())
+    
+    aaa <- setNames(as.data.frame(((t(temp)/Matrix::colSums(DATA@assays[[opt$assay]]@counts))[,o]*100)[,names(sort(table(item),decreasing = T))]),paste0("perc_",names(sort(table(item),decreasing = T))))
+    DATA@meta.data <- DATA@meta.data[,!(colnames(DATA@meta.data) %in% colnames(aaa))]
+    DATA@meta.data <- cbind(DATA@meta.data,aaa)
+  }
+  #---------
+  
+  
+  
+  
+  ##########################
+  ### CELL CYCLE SCORING ###
+  ##########################
+  cat("\nLog Normalizing counts for cell cycle scoring...\n")
+  DATA <- NormalizeData(object = DATA, scale.factor = 1000)
+  
+  cat("\nPredicting cell cycle scores with Seurat ...\n")
+  s.genes <- Seurat::cc.genes$s.genes
+  g2m.genes <- Seurat::cc.genes$g2m.genes
+  
+  if(casefold(opt$species_use) != "hsapiens"){
+    human = useMart("ensembl", dataset = "hsapiens_gene_ensembl",host="apr2019.archive.ensembl.org")
+    mart = useMart("ensembl", dataset = paste0(casefold(opt$species_use),"_gene_ensembl"),host="apr2019.archive.ensembl.org" )
+    s.genes = getLDS(attributes = c("external_gene_name"), filters = "external_gene_name", values = s.genes , mart = mart, attributesL = c("hgnc_symbol"), martL = human, uniqueRows=F,valuesL = "hgnc_symbol")[,1]
+    g2m.genes = getLDS(attributes = c("external_gene_name"), filters = "external_gene_name", values = g2m.genes , mart = mart, attributesL = c("hgnc_symbol"), martL = human, uniqueRows=F,valuesL = "hgnc_symbol")[,1]
+  }
+  
+  DATA <- CellCycleScoring(object = DATA, s.features = s.genes, g2m.features = g2m.genes)
+  DATA$G1.Score <- 1 - ( DATA$S.Score + DATA$G2M.Score )
+  DATA$CC.Diff <- DATA$S.Score - DATA$G2M.Score
+  #---------
+  
+  
+  
+  
+  ###############
+  ### PLOT QC ###
+  ###############
+  cat("\nPlotting QC metrics ...\n")
+  for(i in as.character(unlist(strsplit(opt$columns_metadata,",")))){
+  feats <- colnames(DATA@meta.data) [ grepl("nFeature|nCount|_index|[.]Score",colnames(DATA@meta.data) ) ]
+  feats <- c(feats,"perc_mito" ,"perc_rps","perc_rpl","perc_hb", "perc_protein_coding" ,"perc_lncRNA","perc_snRNA","perc_miRNA","perc_processed_pseudogene",
+  "perc_unknown","perc_Chr_1","perc_Chr_X","perc_Chr_Y","perc_Chr_MT")
+  feats <- feats[feats %in% colnames(DATA@meta.data)]
+  
+  png(filename = paste0(opt$output_path,"/QC_",i,"_ALL.png"),width = 1200*(length(unique(DATA@meta.data[,i]))/2+1),height = 700*ceiling(length(feats)/5),res = 200)
+  print(VlnPlot(object = DATA, features  = feats, ncol = 5,group.by = i,pt.size = .1,assay = opt$assay))
+  invisible(dev.off())}
+  #---------
+  
+  saveRDS(DATA@meta.data,"SC_metadata_QC_1.rds")
+  gc()
+}
+
+```
+
+```{r}
+DATA <-readRDS("SC_metadata_QC.rds")
+
+NF <-  DATA@meta.data [ grepl("nFeature",colnames(DATA@meta.data)) ][,1]
+NC <-  DATA@meta.data [ grepl("nCount",colnames(DATA@meta.data)) ][,1]
+
+
+Ts <- data.frame(
+  MitoT = between(DATA$perc_mito,0.00,25), #Paulo's code was 0.00,25
+  RpsT = between(DATA$perc_rps,1,10),
+  RplT = between(DATA$perc_rps,1,15),
+  chrXT = between(DATA$perc_Chr_X,1,15),
+  chr1T = between(DATA$perc_Chr_1,1,15),
+  nUMIT = between(NF,50,quantile(NF,probs = c(0.995))),
+  nCountT = between(NC,100,quantile(NC,probs = c(0.995))),
+  protein_codingT = between(DATA$perc_protein_coding,50,95),
+  row.names = rownames(DATA@meta.data) )
+print(head(Ts,90))
+
+dim(DATA)
+cell_use <- rownames(Ts)[ rowSums(!Ts) == 0 ]
+DATA$filtered <- (rowSums(!Ts) != 0)
+sum(!DATA$filtered)
+
+
+png(filename = paste0(opt$output_path,"/QC_barlist.png"),width = 2*800*3,height = 800*3,res = 300)
+mypar(1,2,mar=c(2,6,1,1))
+gc()
+
+DATA$SampleID <- factor(DATA$SampleID)
+violist(data =  DATA ,
+        genes = c("nCount_RNA","nFeature_RNA","perc_rpl","perc_rps","perc_mito","perc_lncRNA","perc_Chr_Y"),
+        clustering = "SampleID",assay = "RNA" ,transparency = 50,
+        pt.cex = .3,
+        pt.col = ifelse(DATA$filtered,"red","grey"))
+gc()
+barlist(data =  DATA ,
+        genes = c("nCount_RNA","nFeature_RNA","perc_rpl","perc_rps","perc_mito","perc_lncRNA","perc_Chr_Y","perc_Chr_X"),
+        clustering = "SampleID",assay = "RNA", orderby = "perc_Chr_X",
+        col = c("grey","red")[ DATA$filtered + 1 ])
+dev.off()
+gc()
+
+mart = useMart("ensembl", dataset = paste0(opt$species_use,"_gene_ensembl"),host="jul2019.archive.ensembl.org")
+annot <- getBM(c("external_gene_name","gene_biotype","transcript_biotype","chromosome_name"),mart = mart)
+sel <- annot[match(rownames(DATA@assays[[opt$assay]]@counts) , annot[,1]),"gene_biotype"] != "protein_coding"
+sel[is.na(sel)] <- F
+rownames(DATA)[sel]
+sel2 <-  (annot[match(rownames(DATA@assays[[opt$assay]]@counts) , annot[,1]),"chromosome_name"] %in% c("Chr_MT","Chr_Y","other"))
+sel2[is.na(sel2)] <- F
+rownames(DATA)[sel2]
+sel3 <- grepl("^RPS|^RPL|^MRPS|^MRPL|^MT-|MALAT",rownames(DATA@assays[[opt$assay]]@counts))
+sel3[is.na(sel3)] <- F
+rownames(DATA)[sel3]
+
+genes_use <- rownames(DATA@assays[[opt$assay]]@counts)[ !(sel | sel2 | sel3 ) ]
+
+DATA <- DATA[genes_use , !DATA$filtered]
+gc()
+```
+
+```{r}
+if( file.exists("SC_reductions_pca.rds")){
+  DATA@reductions$pca <- readRDS("SC_reductions_pca.rds")
+} else {
+  
+  DATA <- NormalizeData(object = DATA, scale.factor = 1000)
+  
+  DATA <- FindVariableFeatures(DATA, nfeatures = 6000)
+  
+  DATA <- ScaleData(DATA, vars.to.regress = c("nCount_RNA","nFeature_RNA","perc_mito","S.Score","G2M.Score","CC.Diff") )
+  DATA <- RunPCA(DATA, npcs = 100)
+  saveRDS(DATA@reductions$pca,"SC_reductions_pca.rds")
+}
+gc()
+DATA <- DATA[,rownames(DATA@reductions$pca@cell.embeddings)]
+```
+
+
+```{r}
+if( file.exists("SC_reductions_harmony.rds")){
+ DATA@reductions$harmony <- readRDS("SC_reductions_harmony.rds")
+} else {
+  DATA.harmony <- RunHarmony(
+    DATA,
+    group.by.vars = "SampleID",
+    reduction = "pca",
+    dims.use = 1:100,
+    assay.use = "RNA")
+  
+
+  DATA[["harmony"]] <- DATA.harmony[["harmony"]]
+  saveRDS(DATA@reductions$harmony,"SC_reductions_harmony.rds")
+}
+gc()
+rm(DATA.harmony)
+```
+
+
+```{r}
+#if( file.exists("SC_graphs.rds")){
+  #DATA@graphs <- readRDS("SC_graphs.rds")
+#} else {
+  DATA <- FindNeighbors(DATA,
+                      reduction = "harmony",
+                      assay = "RNA",
+                      nn.method = "annoy",
+                      annoy.metric = "cosine",
+                      dims = 1:50,
+                      k.param=15)
+  saveRDS(DATA@graphs,"SC_graphs.rds")
+#}
+
+DATA <- FindClusters( DATA , graph.name = "RNA_snn" , resolution = 1.2 )
+DATA$seurat_clusters <- as.character(DATA$seurat_clusters)
+gc()
+```
+
+
+
+```{r}
+DATA <- RunUMAP(DATA, dims = 1:50, #50
+                reduction = "harmony",
+                reduction.name = "umap_harmony",
+                min.dist = 0.03, #0.01
+                spread = .3,
+                metric = "correlation",
+                n.neighbors = 30, #10
+                repulsion.strength = 0.05,
+                negative.sample.rate = 20,
+                n.epochs = 100,
+                n.components = 2 )
+
+mypar()
+plot_meta(x = DATA,red = "umap_harmony",feat = "seurat_clusters",frame=F,col = pal,label = T)
+
+```
+
+
+```{r}
+# Use all the cells to run DEGs
+detable <- read.csv("../results/Markers_1.2_top10.csv",row.names = 1)
+
+detable_all <- FindAllMarkers(DATA, only.pos = T,
+                            logfc.threshold = 0.5,assay = "RNA",
+                            min.pct = 0.25)
+  detable_all <- detable_all[ detable_all$p_val < 0.05,  ]
+  detable_all$pct.diff <- detable_all$pct.1 - detable_all$pct.2
+  detable_all$log.pct.diff <- log2(detable_all$pct.1 / (detable_all$pct.2+0.01) )
+  
+
+png(filename = "../results/Dotplot_Top5.png",width = 800*3,height = 800*7,res = 300)
+mypar(1,1,mar=c(4,6,1,5))
+
+ord_all <- factor(sapply(unique(as.character(top5_all$gene)),function(x){getcluster(DATA, x, "seurat_clusters")}))
+plot_dots(DATA, unique(as.character(top5_all$gene))[order(as.numeric( as.character(ord_all) ))], clustering = "seurat_clusters", show_grid = T,main = "top cluster markers",cex.main=1,font.main=1,cex.col = 1,srt = 90,cex.row = 0.9)
+dev.off()
+
+```
+
+
+```{r}
+DATA <- RunUMAP(DATA, dims = 1:50, 
+                reduction = "harmony",
+                metric = "correlation",
+                reduction.name = "umap_harmony_3D",
+                min.dist = 0.01,
+                spread = .3,
+                n.neighbors = 10,
+                n.epochs = 100,
+                n.components = 3 )
+```
+
+```{r}
+library(plotly)
+
+df <- data.frame(DATA@reductions$umap_harmony_3D@cell.embeddings)
+df <- data.frame(df,seurat_clusters=DATA$seurat_clusters)#,subtypes = DATA$Subtypes,celltypes = DATA$Celltypes)
+colnames(df)[1:3] <- c("UMAP_1","UMAP_2","UMAP_3")
+pal <- c(scales::hue_pal()(8),RColorBrewer::brewer.pal(9,"Set1"),RColorBrewer::brewer.pal(8,"Set2") )
+
+p_State <- plot_ly(df,x = ~UMAP_1, y = ~UMAP_2, z=~UMAP_3,color = ~seurat_clusters,
+                   colors = pal, size=.5) %>%  add_markers() %>%
+  layout(scene = list(xaxis = list(title = 'UMAP_1'), yaxis = list(title = 'UMAP_2'),zaxis = list(title = 'UMAP_3')))
+htmlwidgets::saveWidget(p_State, "./umap_3d_clusters.html")
+
+ggplotly(p_State,height=800,width=800)
+
+p_State <- plot_ly(df,x = ~UMAP_1, y = ~UMAP_2, z=~UMAP_3,color = ~subtypes,
+                   colors = pal, size=.5) %>%  add_markers() %>%
+  layout(scene = list(xaxis = list(title = 'UMAP_1'), yaxis = list(title = 'UMAP_2'),zaxis = list(title = 'UMAP_3')))
+htmlwidgets::saveWidget(p_State, "./umap_3d_subtypes.html")
+
+ggplotly(p_State,height=800,width=800)
+
+
+p_State <- plot_ly(df,x = ~UMAP_1, y = ~UMAP_2, z=~UMAP_3,color = ~celltypes,
+                   colors = pal, size=.5) %>%  add_markers() %>%
+  layout(scene = list(xaxis = list(title = 'UMAP_1'), yaxis = list(title = 'UMAP_2'),zaxis = list(title = 'UMAP_3')))
+htmlwidgets::saveWidget(p_State, "./umap_3d_celltypes.html")
+
+ggplotly(p_State,height=800,width=800)
+gc()
+```
+
+#Change ID names after annotation
+
+```{r}
+DATA <- SetIdent(DATA, value = "RNA_snn_res.1.2")
+DATA <- SetIdent(DATA, value = "Celltype")
+##To change cluster IDs by subtypes
+
+DATA <- SetIdent(DATA, value = "RNA_snn_res.1.2")
+new.ids <-  c("NPCs",#0
+                      "INPs",#1
+                      "NPCs",#2
+                      "NPCs",#3
+                      "INPs",#4
+                      "ENs",#5
+                      "VCLPs",#6
+                      "INPs",#7
+                      "NPCs",#8
+                      "IbNs",#9
+                      "EPCs",#10
+                      "OPCs",#11
+                      "INPs",#12
+                      "INPs",#13
+                      "NPCs",#14
+                      "EPCs",#15
+                      "ExNs",#16
+                      "OLs",#17
+                      "SWCs",#18
+                      "IbNs",#19
+                      "ASCs",#20
+                      "NPCs",#21
+                      "Immune",#22
+                      "IbNs",#23
+                      "IbNs",#24
+                      "NPCs",#25
+                      "NPCs",#26
+                      "OPCs", #27
+                      "ExNs", #28
+                      "PCs", #29
+                      "IbNs", #30
+                      "OPCs", #31
+                      "ChNs", #32
+                      "ExNs", #33
+                      "ENs", #34
+                      "NPCs", #35
+                      "IbNs", #36
+                      "Immune",#37
+                      "OPCs",#38
+                      "Blood", #39
+                      "Immune", #40
+                      "Blood", #41
+                      "NPCs", #42
+                      "ENs", #43
+                      "EPCs", #44
+                      "DRGs", #45
+                      "ENs")  #46
+
+new.ids <- setNames(new.ids,as.character(0:(length(new.ids)-1) ))
+DATA$Celltypes <- new.ids [ match( as.character(DATA$seurat_clusters) , names(new.ids))  ]
+DimPlot(DATA, group.by = "Celltypes", label=TRUE)
+
+
+
+png(filename = paste0("../results/UMAP_Celltypes.png"),width = 800*3,height = 800*3,res = 300)
+mypar(1,1,mar=c(1,1,1,0))
+plot_meta(x = DATA,red = "umap_harmony",feat = "Celltypes",frame=F,col = pal,label = T, cex.labels =1.5, add_legend = F, cex=1) + NoLegend()
+dev.off() 
+
+
+png(filename = paste0("../results/UMAP_Age.png"),width = 800*5,height = 800*3,res = 300)
+DimPlot(DATA, group.by = "Celltypes", split.by = "Age", ncol = 4, label = FALSE, pt.size = 1) 
+dev.off() 
+
+
+png(filename = paste0("../results/UMAP_Clusters.png"),width = 800*3,height = 800*3,res = 300)
+mypar()
+plot_meta(x = DATA,red = "umap_harmony",feat = "seurat_clusters",frame=F,col = pal,label = T) + NoLegend()
+dev.off() 
+```
+
+```{r}
+DATA <- SetIdent(DATA, value = "RNA_snn_res.1.2")
+DATA <- SetIdent(DATA, value = "Subtypes")
+DATA <- SetIdent(DATA, value = "Celltype")
+##To change cluster IDs by subtypes
+
+DATA <- SetIdent(DATA, value = "RNA_snn_res.1.2")
+subtype.ids <-  c(    "NPCs_1",#0
+                      "INPs_1",#1
+                      "NPCs_2",#2
+                      "NPCs_3",#3
+                      "INPs_2",#4
+                      "ENs_1",#5
+                      "VCLPs",#6
+                      "INPs_3",#7
+                      "NPCs_4",#8
+                      "IbNs_1",#9
+                      "EPCs_1",#10
+                      "OPCs_1",#11
+                      "INPs_4",#12
+                      "INPs_5",#13
+                      "NPCs_5",#14
+                      "EPCs_2",#15
+                      "ExNs_1",#16
+                      "OLs",#17
+                      "SWCs",#18
+                      "IbNs_2",#19
+                      "ASCs",#20
+                      "NPCs_6",#21
+                      "Immune",#22
+                      "IbNs_3",#23
+                      "IbNs_4",#24
+                      "NPCs_7",#25
+                      "NPCs_8",#26
+                      "OPCs_2", #27
+                      "ExNs_2", #28
+                      "PCs", #29
+                      "IbNs_5", #30
+                      "OPCs_3", #31
+                      "ChNs", #32
+                      "ExNs_3", #33
+                      "ENs_2", #34
+                      "NPCs_9", #35
+                      "IbNs_6", #36
+                      "Immune",#37
+                      "OPCs_4",#38
+                      "Blood_1", #39
+                      "Immune", #40
+                      "Blood_2", #41
+                      "NPCs_10", #42
+                      "ENs_3", #43
+                      "EPCs_3", #44
+                      "DRGs", #45
+                      "ENs_4")  #46
+
+subtype.ids <- setNames(subtype.ids,as.character(0:(length(subtype.ids)-1) ))
+DATA$Subtypes <- subtype.ids [ match( as.character(DATA$seurat_clusters) , names(subtype.ids))  ]
+DimPlot(DATA, group.by = "Subtypes", label=TRUE) + NoLegend()
+
+DimPlot(DATA, group.by = "seurat_clusters", label=TRUE)                       
+
+png(filename = paste0("../results/UMAP_Subtypes.png"),width = 800*3,height = 800*3,res = 300)
+mypar(1,1,mar=c(1,1,1,0))
+plot_meta(x = DATA,red = "umap_harmony",feat = "Subtypes",frame=F,col = pal,label = T,cex.labels =1) + NoLegend()
+dev.off() 
+
+
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

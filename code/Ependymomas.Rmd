@@ -1,0 +1,226 @@
+---
+title: "Ependymomas"
+output: html_document
+editor_options: 
+  chunk_output_type: console
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## R Markdown
+
+This is an R Markdown document. Markdown is a simple formatting syntax for authoring HTML, PDF, and MS Word documents. For more details on using R Markdown see <http://rmarkdown.rstudio.com>.
+
+When you click the **Knit** button a document will be generated that includes both content as well as the output of any embedded R code chunks within the document. You can embed an R code chunk like this:
+
+```{r cars}
+summary(cars)
+```
+
+## Including Plots
+
+You can also embed plots, for example:
+
+```{r pressure, echo=FALSE}
+plot(pressure)
+```
+
+Note that the `echo = FALSE` parameter was added to the code chunk to prevent printing of the R code that generated the plot.
+```{r}
+library(Matrix)
+library(readr)
+library(Seurat)
+```
+
+```{r}
+joint_dataset <- readRDS("../data/Normal_Ependymomas.rds")
+```
+
+
+```{r}
+DATA <- read.delim("../data/GSE141460_EPN_count_matrix_TPM.txt")
+DATA <- CreateSeuratObject(counts = DATA, project = "Ependymomas", min.cells = 3, min.features = 200)
+DATA$orig.ident
+
+DATA <- SetIdent(DATA, value = "orig.ident")
+
+sub("[.].*","",colnames(DATA))
+DATA$datasets <- sub("[.].*","",colnames(DATA))
+
+DATA2 <- DATA[, DATA$datasets %in% c("BT1678", "MUV068") ]
+table(DATA2$datasets)
+saveRDS(DATA2, "../data/Ependymmomas_Spinal_cord.rds")
+
+DATA <- subset(DATA, idents = c("BT1678.", "MUV068."))
+
+DATA <- sub("[.].BT1678","",colnames(DATA))
+DATA
+
+```
+
+
+#Different test on integration 
+```{r}
+library(Matrix)
+Tumor$datasets <- ( sub( "[_].*" ,"", colnames(Tumor) ) )
+Tumor$datasets[Tumor$datasets == "MUV"] <- ( sub( ".*[_]" ,"",sub( "[.].*" ,"", colnames(Tumor)[Tumor$datasets == "MUV"] ) ))
+Tumor$datasets <- factor(Tumor$datasets)
+
+DATA$datasets <- DATA$SampleID
+Tumor$Condition <- "Tumor"
+DATA$Condition <- "Normal"
+
+
+Tumor <- SetIdent(Tumor, value = "datasets")
+
+
+joint_dataset <- merge(DATA,Tumor)
+table(joint_dataset$datasets)
+
+joint_dataset <- NormalizeData(object = joint_dataset, scale.factor = 1000)
+joint_dataset <- FindVariableFeatures(joint_dataset,nfeatures = 6000 )
+
+
+joint_dataset <- ScaleData(joint_dataset,vars.to.regress = c("nCount_RNA","nFeature_RNA","perc_mito","S.Score","G2M.Score","CC.Diff") )
+
+joint_dataset <- RunPCA(joint_dataset, npcs = 100)
+joint_dataset <- RunHarmony( joint_dataset, c("datasets", "Condition"))
+
+joint_dataset <- FindNeighbors(joint_dataset,
+                      reduction = "harmony",
+                      assay = "RNA",
+                      nn.method = "annoy",
+                      annoy.metric = "cosine",
+                      dims = 1:50,
+                      k.param=15)
+joint_dataset <- FindClusters( joint_dataset , graph.name = "RNA_snn" , resolution = 1.2 )
+joint_dataset$seurat_clusters <- as.character(joint_dataset$seurat_clusters)
+gc()
+
+joint_dataset <- RunUMAP(joint_dataset, dims = 1:50, #50
+                reduction = "harmony",
+                reduction.name = "umap_harmony",
+                min.dist = 0.03, #0.01
+                spread = .3,
+                metric = "correlation",
+                n.neighbors = 30, #10
+                repulsion.strength = 0.05,
+                negative.sample.rate = 20,
+                n.epochs = 100,
+                n.components = 2 )
+mypar()
+plot_meta(x = joint_dataset,red = "umap_harmony",feat = "Condition",frame=F,col = pal,label = T)
+plot_meta(x = joint_dataset,red = "umap_harmony",feat = "seurat_clusters",frame=F,col = pal,label = T)
+
+
+```
+
+
+
+#Label transfer 
+```{r}
+DimPlot(joint_dataset, group.by = "Celltypes")
+
+
+library(RcppHNSW)
+library(RcppAnnoy)
+
+reference <- joint_dataset@reductions$harmony@cell.embeddings[joint_dataset$Condition == "Normal",1:30]
+query <- joint_dataset@reductions$harmony@cell.embeddings[joint_dataset$Condition == "Tumor",1:30]
+
+ann <- hnsw_build(reference[,], distance = "cosine", n_threads = 8, verbose = T)
+# ann$save("annoy_tree_file")
+# ann <- new(HnswL2, ncol(reference), "annoy_tree_file", nrow(reference))
+temp3 <- hnsw_search(query, ann, k = 20,n_threads = 8, verbose = T)
+hist(temp3$dist,breaks = 300)
+cutoff <- 0.2
+abline(v=cutoff,col="red")
+temp3$dist[temp3$dist > cutoff] <- 0
+
+
+
+library(Matrix)
+i <- rep(1:nrow(temp3$idx),ncol(temp3$idx))
+j <- c(temp3$idx)
+p <- c(temp3$dist>0)*1
+nn <- as(sparseMatrix(i = i, j=j,  x=p, dims = c(nrow(query),nrow(reference)),
+       dimnames = list(rownames(query),rownames(reference))), "dgCMatrix")
+
+# nn <- as(sparseMatrix(i = i, j=j,  x=p, dims = c(nrow(reference),nrow(query)),
+#        dimnames = list(rownames(reference),rownames(query))), "dgCMatrix")
+
+mm <- Matrix(model.matrix(~0+joint_dataset$Celltypes[joint_dataset$Condition == "Normal"]),sparse = T)
+colnames(mm) <- sub(".*[]]","",colnames(mm))
+dim(mm)
+
+dim(nn)
+
+
+result <- nn %*% mm
+dim(result)
+rowmax <- apply(result,1,max)
+prediction_score <- rowmax / 20
+prediction_score
+
+hist(prediction_score,breaks = 300)
+abline(v=0.6,col="red")
+labels <-  apply(result,1,function(x) colnames(mm)[which.max(x)] )
+labels
+rownames(nn)
+
+labels <- labels[prediction_score>0.6]
+prediction_score <- prediction_score[prediction_score>0.6]
+
+
+joint_dataset$prediction_labels <- rep("",ncol(joint_dataset))
+joint_dataset$prediction_score <- rep(0,ncol(joint_dataset))
+joint_dataset$prediction_labels[names(labels)] <- labels
+joint_dataset$prediction_score[names(prediction_score)] <- prediction_score+0.1
+
+plot_feat(joint_dataset , red = "umap_harmony" , feat = "prediction_score")
+
+joint_dataset$joint_celltypes <- joint_dataset$Celltypes
+joint_dataset$joint_celltypes[names(labels)] <- labels
+
+png("../results/Ependymomas/lable_transfer_umap.png",width = 3*1200,height = 3*600,res = 300)
+mypar(1,2)
+plot_meta(joint_dataset , red = "umap_harmony" , feat = "prediction_labels" , label=T)
+plot_meta(joint_dataset , red = "umap_harmony" , feat = "joint_celltypes", label=T, add_legend = T)
+# plot_meta(joint_dataset , red = "umap_harmony" , feat = "Celltypes", label=T)
+dev.off()
+
+pdf("../results/Ependymomas/lable_transfer_umap.pdf",width = 8,height = 8,useDingbats = F)
+mypar(1,1,mar=c(4,4,4,6))
+#plot_meta(joint_dataset , red = "umap_harmony" , feat = "prediction_labels" , label=T)
+plot_meta(joint_dataset , red = "umap_harmony" , feat = "joint_celltypes", label=T, add_legend = T)
+# plot_meta(joint_dataset , red = "umap_harmony" , feat = "Celltypes", label=T)
+dev.off()
+
+DimPlot(joint_dataset, group.by = "joint_celltypes")
+DimPlot(joint_dataset, group.by = "prediction_labels")
+
+
+p1 <-DimPlot(joint_dataset, group.by = "joint_celltypes")
+p2 <-DimPlot(joint_dataset, group.by = "Condition")
+p1+p2
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
