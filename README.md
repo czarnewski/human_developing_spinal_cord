@@ -42,10 +42,10 @@ The list of all datasets used in the manuscript are depicted below:
 |------------|---------|--------------------|--------------|
 | 10X scRNAseq | Human developing spinal cord | this manuscript | [GSE219122](https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=GSE219122) |](https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=GSE219122) |
 | 10X Visium | Human developing spinal cord | this manuscript | [GSE219122](https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=GSE219122) |](https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=GSE219122) |
-| 10X scRNAseq | Mouse adult spinal cord | Sathyamurthy et al. 2018 Cell Rep (https://pubmed.ncbi.nlm.nih.gov/29466745/)| [GSE103892](https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=GSE103892) |
-| 10X scRNAseq | Mouse juvenile spinal cord | [Zeisel et al. 2018 Cell (https://pubmed.ncbi.nlm.nih.gov/30096314/)]| [SRP135960](https://www.ncbi.nlm.nih.gov/sra/SRP135960) |
-| SplitSeq | Mouse postnatal | [Rosenberg et al. 2018 Science (https://pubmed.ncbi.nlm.nih.gov/29545511/)] | [GSE110823](https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=GSE110823) |
-| 10X scRNAseq | Mouse adult spinal cord | [Blum et al. 2021  Nat Neurosci](https://pubmed.ncbi.nlm.nih.gov/33589834/)] | [GSE161621](https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=GSE161621) |
-| 10X scRNAseq | Mouse adult spinal cord | [Alkaslasi et al. 2021  Nat Comm](https://pubmed.ncbi.nlm.nih.gov/33931636/)]| [GSE167597](https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=GSE167597) |
+| 10X scRNAseq | Mouse adult spinal cord | [Sathyamurthy et al. 2018] Cell Rep (https://pubmed.ncbi.nlm.nih.gov/29466745/)| [GSE103892](https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=GSE103892) |
+| 10X scRNAseq | Mouse juvenile spinal cord | [Zeisel et al. 2018 Cell] (https://pubmed.ncbi.nlm.nih.gov/30096314/)| [SRP135960](https://www.ncbi.nlm.nih.gov/sra/SRP135960) |
+| SplitSeq | Mouse postnatal | [Rosenberg et al. 2018 Science] (https://pubmed.ncbi.nlm.nih.gov/29545511/)| [GSE110823](https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=GSE110823) |
+| 10X scRNAseq | Mouse adult spinal cord | [Blum et al. 2021  Nat Neurosci](https://pubmed.ncbi.nlm.nih.gov/33589834/) | [GSE161621](https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=GSE161621) |
+| 10X scRNAseq | Mouse adult spinal cord | [Alkaslasi et al. 2021  Nat Comm](https://pubmed.ncbi.nlm.nih.gov/33931636/)| [GSE167597](https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=GSE167597) |
 | 10X scRNAseq | Mouse developing spinal cord | [Delile et al 2019 Development](https://pubmed.ncbi.nlm.nih.gov/30846445/) | [E-MTAB-7320](https://www.ebi.ac.uk/biostudies/arrayexpress/studies/E-MTAB-7320/files) |
 | 10X scRNAseq | Bone marrow from Tabula Muris | [TMC et al 2018 Nature](https://www.nature.com/articles/s41586-018-0590-4) | [GSE109774](https://0-www-ncbi-nlm-nih-gov.brum.beds.ac.uk/geo/query/acc.cgi?acc=GSE109774) |
