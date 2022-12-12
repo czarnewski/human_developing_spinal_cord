@@ -30,8 +30,8 @@ cd human_developing_spinal_cord
 conda activate base
 conda install -c conda-forge mamba
 
-mamba env create -n b_cell_mh -f env_b_cell_mh.yml
-conda activate b_cell_mh
+mamba env create -n dev_sc -f env_dev_sc.yml
+conda activate dev_sc
 ```
 ***
 ### Datasets
