@@ -7,7 +7,7 @@ This is a public repository containing scripts used in the publication:
 Li X et al. 
 Decoding spatiotemporal gene expression of the developing human spinal cord and implications for ependymoma origin
 
-**Nature Neuroscience** 2022 (in Revision)
+**Nature Neuroscience** 2023 (https://www.nature.com/articles/s41593-023-01312-9)
 
 ***
 ### Running the analysis
